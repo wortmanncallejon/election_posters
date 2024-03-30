@@ -47,3 +47,9 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Mac
+.DS_Store
+
+#Ignore Images
+*.png
