@@ -9,8 +9,9 @@
 ###########################################
 
 # Load Packages and Functions ----
+setwd('/Users/callejon/Desktop/Privat/GitHub Repos/election_posters/')
 
-pacman::p_load("here", "dplyr", "readr", "ggplot2", "ebal", "stringr", "fixest", "MatchIt", "sf")
+pacman::p_load("here", "dplyr", "readr", "ggplot2", "ebal", "stringr", "fixest", "MatchIt", "sf", "purrr")
 
 run_bern <- function(n_trials, n_draws, prob, ...) unlist(purrr::pmap(list(rep(n_draws, n_trials), rep(prob, n_trials)), function(d, p) mean(rbinom(d, 1, p))))
 get_weights <- function(df, varlist) {
@@ -191,18 +192,18 @@ wdh_data %>%
          upr = est + t_crit*se,
          partei = factor(partei, levels = rev(c("SPD", "CDU", "GRÜNE", "AfD", "FDP", "DIE LINKE", "Sonstige")))) %>%
   ggplot(aes(est, partei,xmin = lwr, xmax = upr, color = partei)) +
-  scale_x_continuous("ATT Schätzungen", labels = function(x) paste0(round(x*100,0)," PP")) +
+  scale_x_continuous("ATT Schätzungen", labels = function(x) paste0(round(x*100,0),"%P")) +
   scale_y_discrete(NULL) +
   scale_color_manual(values = rev(c("#CC0000", "#000000", "#0E8C1D", "#005EA4", "#FFC000", "#CC0066", "#BFBFBF")), guide = "none") +
   geom_vline(xintercept = 0, linetype = "longdash") +
-  geom_pointrange() +
+  geom_pointrange(size = 1, linewidth = 1) +
   facet_wrap(~stimme) +
   theme_light(base_size = 18) +
   theme(panel.grid = element_blank()) +
   ggtitle('Matching-Schätzung des "Plakateffekts"')
 
 
-ggsave(file = "matching.png", width = 33.9, height = 19.1, units = "cm", dpi = 800)
+ggsave(file = "matching.png", width = 25, height = 15, units = "cm", dpi = 600)
 
 # DiD -----
 get_did_counterfactual <- function(s) {
@@ -222,11 +223,11 @@ get_did_counterfactual <- function(s) {
     return()
 }
 get_text_data <- function(s) {
-  model <- feols(anteil ~ D*`T`, data = filter(did_data, partei == "GRÜNE" & stimme == s)) 
+  model <- feols(anteil ~ D*`T`, data = filter(did_data, partei == "GRÜNE" & stimme == s), cluster = "briefwahlbezirk") 
   
   tibble(x = c(24.1),
          y = c(model[["coeftable"]][4,1]/2 + sum(model[["coeftable"]][1:3,1])),
-         lab = c(paste0(round(model[["coeftable"]][4,1]*100,2),"PP ",signif(model[["coeftable"]][4,4]))),
+         lab = c(paste0(round(model[["coeftable"]][4,1]*100,2),"%P ",signif(model[["coeftable"]][4,4]))),
          stimme = s) %>% 
     return()
 }
@@ -239,6 +240,28 @@ get_brace_data <- function(s) {
     return()
 }
 
+did_data <- data_2024 %>% 
+  select(id, partei, stimme, sim) %>% 
+  rename(briefwahlbezirk = id,
+         anteil = sim) %>% 
+bind_rows(select(data, briefwahlbezirk, partei, stimme, anteil),
+          .id = "T") %>% 
+  mutate(D = ifelse(briefwahlbezirk %in% treated & substr(briefwahlbezirk,1,2) == "12" ,1,0),
+         `T` = (as.numeric(`T`) - 2)*-1) 
+
+stimmen <- c("Erststimme", "Zweitstimme")
+
+plot_data <- bind_rows(map(stimmen, get_did_counterfactual))
+
+did_data <- data_2024 %>% 
+  select(id, partei, stimme, sim) %>% 
+  rename(briefwahlbezirk = id,
+         anteil = sim) %>% 
+bind_rows(select(data, briefwahlbezirk, partei, stimme, anteil),
+          .id = "T") %>% 
+  mutate(D = ifelse(briefwahlbezirk %in% treated & substr(briefwahlbezirk,1,2) == "12" ,1,0),
+         `T` = (as.numeric(`T`) - 2)*-1) 
+
 stimmen <- c("Erststimme", "Zweitstimme")
 
 plot_data <- bind_rows(map(stimmen, get_did_counterfactual))
@@ -250,16 +273,41 @@ plot_data %>%
   scale_color_manual(NULL, values = c(paste0("#0E8C1D","88"), "#0E8C1D", "darkgrey")) +
   scale_linetype_manual(NULL, values = c("solid","solid","dashed")) +
   geom_line(aes(group = D, linetype = D)) +
-  geom_point() +
+  geom_point(size = 1) +
   ggbrace::stat_brace(data = bind_rows(map(stimmen, get_brace_data)), aes(x,y), rotate = 90, color = "black", outside = F) +
   geom_text(data = bind_rows(map(stimmen, get_text_data)), aes(x,y, label = lab), hjust = -0.1, color = "black", size = 4) +
   facet_wrap(~stimme) +
   theme_light(base_size = 18) +
   theme(legend.position = "bottom",
-        panel.grid = element_blank()) +
+        panel.grid = element_blank()) #+
   ggtitle('Difference-in-Differences-Schätzung des "Plakateffekts"')
 
-ggsave(file = "did_erst.png", width = 33.9, height = 19.1, units = "cm", dpi = 800)
+ggsave(file = "did_erst.png", width = 25, height = 15, units = "cm", dpi = 800)
+
+
+fit_feols <- function(p, s) feols(anteil ~ D*`T`, data = filter(did_data, partei == p & stimme == s), cluster = "briefwahlbezirk") 
+
+parteien <- c("SPD", "CDU", "GRÜNE", "AfD", "FDP", "DIE LINKE", "Sonstige")
+
+map2(c(parteien,parteien), c(rep(stimmen[1],7),rep(stimmen[2],7)), fit_feols) %>% 
+  map(~broom::tidy(.x, conf.int = T)) %>% 
+  bind_rows(.id = "ps") %>% 
+  mutate(ps = as.numeric(ps),
+         partei = factor(parteien[ifelse(ps > 7,ps - 7 ,ps)],
+                         levels = rev(parteien)),
+         stimme = stimmen[ifelse(ps > 7,2,1)]) %>% 
+  filter(term == "D:T") %>% 
+  ggplot(aes(estimate, partei,xmin = conf.low, xmax = conf.high, color = partei)) +
+  scale_x_continuous("ATT Schätzungen", labels = function(x) paste0(round(x*100,0),"%P")) +
+  scale_y_discrete(NULL) +
+  scale_color_manual(values = rev(c("#CC0000", "#000000", "#0E8C1D", "#005EA4", "#FFC000", "#CC0066", "#BFBFBF")), guide = "none") +
+  geom_vline(xintercept = 0, linetype = "longdash") +
+  geom_pointrange(size = 1, linewidth = 1) +
+  facet_wrap(~stimme) +
+  theme_light(base_size = 18) +
+  theme(panel.grid = element_blank())
+
+ggsave(file = "did_complete.png", width = 25, height = 15, units = "cm", dpi = 800)
 
 # Add ons ----
 
@@ -268,8 +316,10 @@ agh_geo <- st_read(here("data","RBS_OD_UWB_AH21", "RBS_OD_UWB_AH21.shp")) %>%
   mutate(wdh = ifelse(postal_id %in% treated, "Wiederholung", "Keine Wiederholung"),
          rdf = factor(ifelse(BWK == "77", 1, 0)))
 
+bernstein_colors <-  c("#003255", "#A02D23", "#378981", "#415F7D", "#A5B4B4", "#601B15", "#6E7887", "#21524D", "#464B4B", "#27394B")
+
 ggplot(agh_geo, aes(fill = wdh, geometry = geometry, alpha = rdf)) +
-  scale_fill_manual(NULL, values = c("grey", "red")) +
+  scale_fill_manual(NULL, values = c("grey", bernstein_colors[2])) +
   scale_alpha_manual(values = c(0.6, 1), guide = "none") +
   geom_sf(color = "white", linewidth = 0.05) +
   ggtitle("Wiederholung BTW im Wahlkreis 77") +
@@ -278,6 +328,67 @@ ggplot(agh_geo, aes(fill = wdh, geometry = geometry, alpha = rdf)) +
 
 ggsave(file = "map.png", width = 16, height = 9, units = "cm", dpi = 600)
 
+agh_geo %>% 
+  left_join(data_matched, by = c("postal_id" = "id")) %>% 
+  mutate(D = factor(case_when(is.na(D) & wdh == "Keine Wiederholung" ~ wdh,
+                              is.na(D) & wdh != "Keine Wiederholung" ~ "Ausgeschlossen",  
+                              BWK == "77" & !is.na(D) ~ "Untersuchungsgruppe",
+                              BWK != "77" & !is.na(D) ~ "Kontrollgruppe"))) %>% 
+  ggplot(aes(fill = D, geometry = geometry, alpha = wdh)) +
+  scale_fill_manual(NULL, values = c("grey", "grey", bernstein_colors[1], bernstein_colors[2])) +
+  scale_alpha_manual(values = c(0.6, 1), guide = "none") +
+  geom_sf(color = "white", linewidth = 0.05) +
+  guides(fill=guide_legend(ncol = 2)) +
+  theme_void() +
+  theme(legend.position = "bottom",
+        plot.background = element_rect(fill = "white", color = "white"),
+        panel.background = element_rect(fill = "white", color = "white")) 
+
+ggsave(file = "map_tc.png", width = 16, height = 9, units = "cm", dpi = 600)
+
+social %>% 
+  mutate(weight = ifelse(id %in% data_matched$id,1,0)) %>% 
+  tidyr::pivot_longer(-c(id,D,weight)) %>%
+  mutate(value = value/100) %>% 
+  calc_coefs() %>% 
+  filter(!name %in% c("AG", "Deutsche18VeränderungzumVo")) %>% 
+  rename(Variables = name) %>%  
+  tidyr::pivot_longer(-c(Variables,df)) %>% 
+  mutate(Matched = ifelse(str_detect(name, "w_"),"Mit Matching", "Ohne Matching"),
+         Statistic = ifelse(str_detect(name, "est"), "est", "se")) %>% 
+  dplyr::select(-name) %>% 
+  tidyr::pivot_wider(names_from = "Statistic", values_from = "value") %>% 
+  mutate(t_crit = qt(0.025, df, lower.tail = F),
+         lwr = est - t_crit*se,
+         upr = est + t_crit*se,
+         in_eb = ifelse(Variables %in% colnames(social)[bal_vars],"Ja","Nein"),
+         Gs = factor(case_when(str_detect(Variables, "2021") ~ "Wahlverhalten",
+                               Variables %in% c("Einwohnerunter6Jahre", "Einwohner6bisunter18", "Einwohner18bisunter65", "Einwohner65") ~ "Alter",
+                               Variables %in% c("Deutsche18bisunter25", "Deutsche25bisunter35", "Deutsche35bisunter45", "Deutsche45bisunter60", "Deutsche60bisunter70", "Deutsche70") ~ "Wahlberechtigte",
+                               Variables %in% c("Deutsche18Familienstandledi", "Deutsche18Familienstandverh", "Deutsche18Familienstandverw", "Deutsche18Familienstandgesc", "Deutsche18FamilienstandELP") ~ "Familienstand",
+                               Variables %in% c("Deutsche16mitMigrationshint", "Deutsche18mitMigrationshint", "Einwohnerunter65inSGBII201", "Deutsche18weiblich", "Deutsche18Religionszugehörig", "Ausländer", "EUBürger16", "Deutsche16", "Deutsche18") ~ "Andere"),
+                     levels = c("Wahlverhalten", "Wahlberechtigte", "Alter", "Familienstand", "Andere")),
+         Variables = case_when(Gs == "Wahlverhalten" ~ str_remove(Variables,"2021"),
+                               Gs == "Wahlberechtigte" ~ str_replace_all(str_replace_all(str_replace_all(Variables,"Deutsche", "Deutsche "),"bis", " bis "), "unter", "unter "),
+                               Gs == "Alter" ~ str_replace_all(str_replace_all(str_replace_all(str_replace(Variables, "Jahre", " Jahre"),"Einwohner", "Einwohner "),"bis", " bis "), "unter", "unter "),
+                               Gs == "Familienstand" ~ str_remove_all(Variables, "Deutsche18Familienstand"),
+                               T ~ Variables)) %>% 
+  filter(Gs != "Andere") %>% 
+  ggplot(aes(est, Variables, color = Matched)) +
+  scale_y_discrete(NULL) +
+  scale_x_continuous("Unterschied zwischen Untersuchungs- und Kontrolgruppe", labels = function(x) paste0(round(x*100),"%P")) +
+  scale_color_manual(NULL, values = c(bernstein_colors[3], bernstein_colors[4])) +
+  geom_vline(xintercept = 0, linetype = "longdash") +
+  geom_point(position = position_dodge(0.5)) +
+  geom_linerange(aes(xmin = lwr, xmax = upr), position = position_dodge(0.5), alpha = 0.2) +
+  guides(color=guide_legend(ncol = 2)) +
+  facet_grid(rows = vars(Gs), scales = "free_y") +
+  theme_light(base_size = 12) +
+  theme(panel.grid = element_blank(),
+        legend.position = "bottom")
+
+ggsave(file = "tc.png", width = 25, height = 15, units = "cm", dpi = 600)
+#ggsave(file = "file_name.png", width = 31, height = 12, units = "cm", dpi = 600)
 
 wdh_data %>% 
   filter(partei == "GRÜNE" & stimme == "Zweitstimme")  %>% 
